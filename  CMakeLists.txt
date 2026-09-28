@@ -6,4 +6,103 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(autoaim apps/main.cpp)
+# 海康模块默认关闭。
+# 没有安装海康SDK时，仍然可以编译通信和标定程序。
+option(WITH_HIK "Build Hikrobot camera support" OFF)
+
+# 当前新增的视觉模块使用OpenCV。
+find_package(OpenCV REQUIRED COMPONENTS
+    core
+    imgproc
+    imgcodecs
+    highgui
+    calib3d
+)
+
+# 已经实现的协议编解码库。
+add_library(srm_protocol
+    src/communication/protocol.cpp
+)
+
+target_include_directories(srm_protocol PUBLIC
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+# 小型视觉模块暂时在头文件中实现。
+# INTERFACE库负责向使用者传递头文件路径和依赖。
+add_library(srm_vision INTERFACE)
+
+target_include_directories(srm_vision INTERFACE
+    ${PROJECT_SOURCE_DIR}/src
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(srm_vision INTERFACE
+    srm_protocol
+    ${OpenCV_LIBS}
+)
+
+# USB CDC实现使用Linux系统接口。
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(communication_check
+        apps/communication_check.cpp
+    )
+
+    target_link_libraries(communication_check PRIVATE
+        srm_protocol
+    )
+endif()
+
+# 内参标定程序不依赖海康SDK。
+# 它只需要读取已经保存的图片。
+add_executable(calibrate_camera
+    apps/calibrate_camera.cpp
+)
+
+target_link_libraries(calibrate_camera PRIVATE
+    srm_vision
+)
+
+if(WITH_HIK)
+    # 配置时由使用者传入实际路径，不写死SDK安装位置。
+    set(HIK_INCLUDE_DIR "" CACHE PATH
+        "Directory containing MvCameraControl.h"
+    )
+
+    set(HIK_LIBRARY "" CACHE FILEPATH
+        "Full path to MvCameraControl library"
+    )
+
+    if(NOT EXISTS "${HIK_INCLUDE_DIR}/MvCameraControl.h")
+        message(FATAL_ERROR
+            "Please set HIK_INCLUDE_DIR to the SDK include directory"
+        )
+    endif()
+
+    if(NOT EXISTS "${HIK_LIBRARY}")
+        message(FATAL_ERROR
+            "Please set HIK_LIBRARY to the SDK library file"
+        )
+    endif()
+
+    add_library(srm_camera
+        src/camera/hik_camera.cpp
+    )
+
+    target_include_directories(srm_camera PRIVATE
+        ${HIK_INCLUDE_DIR}
+    )
+
+    target_link_libraries(srm_camera PUBLIC
+        srm_vision
+        ${HIK_LIBRARY}
+    )
+
+    add_executable(camera_view
+        apps/camera_view.cpp
+    )
+
+    target_link_libraries(camera_view PRIVATE
+        srm_camera
+    )
+endif()
